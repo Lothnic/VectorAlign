@@ -33,7 +33,6 @@ def get_sentence_embeddings():
     english_embeddings = []
     hindi_embeddings = []
     
-
     # Disable gradient computation to save memory
     '''
     Was not using torch.no_grad() which was leading to CUDA out of memory error
@@ -69,6 +68,30 @@ def get_sentence_embeddings():
     
     return english_embeddings, hindi_embeddings
 
-english_embeddings, hindi_embeddings = get_sentence_embeddings()
-print(english_embeddings[0])
-print(hindi_embeddings[0])
+def get_word_embeddings():
+    english_word_embeddings = []
+    hindi_word_embeddings = []
+    
+    with torch.no_grad():
+        for i in range(length):
+            english_tokens = tokenizer(english_sentences[i], return_tensors='pt').to(device)
+            hindi_tokens = tokenizer(hindi_sentences[i], return_tensors='pt').to(device)
+
+            '''
+            Now for the word embeddings we are using the last hidden state of the model which returns the embedding for
+            each token in the sentence.
+            '''
+            english_word_embeddings.append(model(**english_tokens).last_hidden_state.detach().cpu())
+            hindi_word_embeddings.append(model(**hindi_tokens).last_hidden_state.detach().cpu())
+
+            if (i + 1) % 100 == 0:
+                print(f"Processed {i + 1}/{length} sentences")
+    
+    return english_word_embeddings, hindi_word_embeddings
+
+
+
+if __name__=="__main__":
+    english_embeddings, hindi_embeddings = get_sentence_embeddings()
+    print(english_embeddings[0])
+    print(hindi_embeddings[0])
