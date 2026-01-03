@@ -100,7 +100,8 @@ def similarity(embed1,embed2):
     v1_normalised = v1 / norm1
     v2_normalised = v2 / norm2
 
-    return np.dot(v1_normalised,v2_normalised.T)
+    return np.dot(v1_normalised, v2_normalised.T).item()
+
 
 if __name__=="__main__":
     english_embeddings, hindi_embeddings = get_sentence_embeddings(4)
@@ -128,4 +129,22 @@ if __name__=="__main__":
     
     for i in range(4):
         print(similarity(english_embeddings[i],hindi_embeddings[i]))
+
+    for i in range(4):
+        sim = similarity(english_embeddings[i], hindi_embeddings[i])
+        if sim > 0.5:
+            english_words = english_word_embeddings[i]
+            hindi_words = hindi_word_embeddings[i]
+            
+            # Initialize matrix for this sentence pair
+            sim_matrix = np.zeros((english_words.shape[1], hindi_words.shape[1]))
+
+            for j in range(english_words.shape[1]):
+                for k in range(hindi_words.shape[1]):
+                    # Compute similarity for each token pair
+                    sim_matrix[j, k] = similarity(english_words[:, j], hindi_words[:, k])
+            
+            print(f"\nSimilarity Matrix for sentence {i}:")
+            print(sim_matrix)
+
 
