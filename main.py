@@ -141,41 +141,121 @@ def bidir_argmax(sim_matrix):
         best_match = np.argmax(sim_matrix[:, j])
         backward.append((int(best_match), j))
 
-    final_alignment = intersection(forward, backward)
+    # Set intersection works better for tuples
+    final_alignment = set(forward) & set(backward)
 
-    return final_alignment
+    return list(final_alignment)
+
+def convert_id_to_token(alignments, eng_sentence, hin_sentence):
+    # Get tokens with special markers
+    eng_tokens = ["[CLS]"] + tokenizer.tokenize(eng_sentence) + ["[SEP]"]
+    hin_tokens = ["[CLS]"] + tokenizer.tokenize(hin_sentence) + ["[SEP]"]
+    
+    aligned_pairs = []
+    
+    for (eng_idx, hin_idx) in alignments:
+        # Skip special tokens [CLS] (index 0) and [SEP] (last index)
+        if eng_idx == 0 or eng_idx == len(eng_tokens) - 1:
+            continue
+        if hin_idx == 0 or hin_idx == len(hin_tokens) - 1:
+            continue
+        
+        eng_token = eng_tokens[eng_idx]
+        hin_token = hin_tokens[hin_idx]
+        
+        aligned_pairs.append((eng_token, hin_token))
+    
+    return aligned_pairs
+
+def merge_subwords(aligned_pairs):
+    merged = []
+    current_eng = ""
+    current_hin = ""
+    
+    for (eng_tok, hin_tok) in aligned_pairs:
+        if eng_tok.startswith("##"):
+            current_eng += eng_tok[2:]  # Remove ## prefix
+        else:
+            if current_eng:
+                merged.append((current_eng, current_hin))
+            current_eng = eng_tok
+            current_hin = hin_tok
+    
+    # Don't forget the last pair
+    if current_eng:
+        merged.append((current_eng, current_hin))
+    
+    return merged
+
+def build_dictionary(all_alignments):
+    from collections import defaultdict
+    
+    dictionary = defaultdict(int)
+    
+    for (eng, hin) in all_alignments:
+        # Clean tokens
+        eng_clean = eng.lower().strip(string.punctuation)
+        hin_clean = hin.strip()
+        
+        if eng_clean and hin_clean:  # Skip empty tokens
+            dictionary[(eng_clean, hin_clean)] += 1
+    
+    return dict(dictionary)
+
+def save_dictionary(dictionary, output_path="output/bilingual_dict.txt"):
+    import os
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    
+    sorted_dict = sorted(dictionary.items(), key=lambda x: x[1], reverse=True)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for (eng, hin), count in sorted_dict:
+            f.write(f"{eng}\t{hin}\t{count}\n")
+    
+    print(f"Dictionary saved to {output_path} with {len(sorted_dict)} entries")
+
 
 if __name__=="__main__":
-    english_embeddings, hindi_embeddings = get_sentence_embeddings(4)
-    english_word_embeddings, hindi_word_embeddings = get_word_embeddings(4)
-
-    for i in range(2):
-        print(english_word_embeddings[i].shape)
-        # torch.Size([1, 7, 768]) -> [batch_size, sequence_length, hidden_size]
-        '''
-        here sequence_length is the number of tokens in the sentence where 2 additional tokens are also added
-        i.e [CLS] and [SEP]
-        eg the first sentence was -> " Modern markets :  confident consumers "
-        here the tokens generated are -> [CLS], Modern, markets, :, confident, consumers, [SEP] -> hence 7 tokens
-
-        these parameters are according to the model used for tokenisation and creating embeddings
-        changing the model will change the parameters
-
-        batch size is 1 due to only one sentence at a time
-        and hidden size is 768 as that is the dimension of the model
-        '''
-        
-        print(english_embeddings[i].shape)
-        # torch.Size([1, 768]) -> [batch_size, hidden_size]
-
-    for i in range(1,2):
+    NUM_SENTENCES = 100
+    
+    print("Step 1: Getting embeddings...")
+    english_embeddings, hindi_embeddings = get_sentence_embeddings(NUM_SENTENCES)
+    english_word_embeddings, hindi_word_embeddings = get_word_embeddings(NUM_SENTENCES)
+    
+    print("\nStep 2: Computing alignments...")
+    all_alignments = []
+    
+    for i in range(NUM_SENTENCES):
         matrix = compute_sim_matrix(
             english_word_embeddings[i],
             hindi_word_embeddings[i],
             english_embeddings[i],
             hindi_embeddings[i]
         )
+        
         if matrix is not None:
-            print(f"\nSimilarity Matrix for sentence {i}:")
-            print(matrix)
-            print(f"Best alignment: {per_row_argmax(matrix)}")
+            # Get bidirectional alignments
+            alignments = bidir_argmax(matrix)
+            
+            # Convert indices to tokens
+            token_pairs = convert_id_to_token(
+                alignments,
+                english_sentences[i],
+                hindi_sentences[i]
+            )
+            
+            # Merge subwords
+            merged_pairs = merge_subwords(token_pairs)
+            
+            # Add to all alignments
+            all_alignments.extend(merged_pairs)
+            
+            # Print progress
+            if (i + 1) % 10 == 0:
+                print(f"Processed {i + 1}/{NUM_SENTENCES} sentences")
+    
+    print(f"\nStep 3: Building dictionary from {len(all_alignments)} alignment pairs...")
+    dictionary = build_dictionary(all_alignments)
+    
+    print(f"\nStep 4: Saving dictionary...")
+    save_dictionary(dictionary)
