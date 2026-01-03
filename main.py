@@ -17,10 +17,10 @@ model.eval()
 
 # Loading the data
 with open('data/english.txt','r', encoding='utf-8') as f:
-    english_sentences = f.read().strip().split('\n')
+    english_sentences = f.read().strip().strip('\ufeff').split('\n')
 
 with open('data/hindi.txt','r',encoding='utf-8') as f:
-    hindi_sentences = f.read().strip().split('\n')
+    hindi_sentences = f.read().strip().strip('\ufeff').split('\n')
 
 length = min(len(english_sentences),len(hindi_sentences))
 print(f'Length Of the data : {length}')
@@ -29,7 +29,7 @@ print(f'Length Of the data : {length}')
 def clean_word(word):
     return word.strip(string.punctuation).lower()
 
-def get_sentence_embeddings():
+def get_sentence_embeddings(leng):
     english_embeddings = []
     hindi_embeddings = []
     
@@ -41,7 +41,7 @@ def get_sentence_embeddings():
     as back prop is not required because we are not training the model.
     '''
     with torch.no_grad():  
-        for i in range(length):
+        for i in range(leng):
             '''
             Here we are tokening on the fly and moving it to the gpu where the model is present and embedding is computed
             return_tensors='pt' returns the tokens in pytorch format
@@ -68,12 +68,12 @@ def get_sentence_embeddings():
     
     return english_embeddings, hindi_embeddings
 
-def get_word_embeddings():
+def get_word_embeddings(leng):
     english_word_embeddings = []
     hindi_word_embeddings = []
     
     with torch.no_grad():
-        for i in range(length):
+        for i in range(leng):
             english_tokens = tokenizer(english_sentences[i], return_tensors='pt').to(device)
             hindi_tokens = tokenizer(hindi_sentences[i], return_tensors='pt').to(device)
 
@@ -89,9 +89,43 @@ def get_word_embeddings():
     
     return english_word_embeddings, hindi_word_embeddings
 
+def similarity(embed1,embed2):
+    # return cosine similarity with normalisation
+    v1 = embed1.detach().cpu().numpy()
+    v2 = embed2.detach().cpu().numpy()
 
+    norm1 = np.linalg.norm(v1)
+    norm2 = np.linalg.norm(v2)
+
+    v1_normalised = v1 / norm1
+    v2_normalised = v2 / norm2
+
+    return np.dot(v1_normalised,v2_normalised.T)
 
 if __name__=="__main__":
-    english_embeddings, hindi_embeddings = get_sentence_embeddings()
-    print(english_embeddings[0])
-    print(hindi_embeddings[0])
+    english_embeddings, hindi_embeddings = get_sentence_embeddings(4)
+    english_word_embeddings, hindi_word_embeddings = get_word_embeddings(4)
+
+    for i in range(2):
+        print(english_word_embeddings[i].shape)
+        # torch.Size([1, 7, 768]) -> [batch_size, sequence_length, hidden_size]
+        '''
+        here sequence_length is the number of tokens in the sentence where 2 additional tokens are also added
+        i.e [CLS] and [SEP]
+        eg the first sentence was -> " Modern markets :  confident consumers "
+        here the tokens generated are -> [CLS], Modern, markets, :, confident, consumers, [SEP] -> hence 7 tokens
+
+        these parameters are according to the model used for tokenisation and creating embeddings
+        changing the model will change the parameters
+
+        batch size is 1 due to only one sentence at a time
+        and hidden size is 768 as that is the dimension of the model
+        '''
+        
+        print(english_embeddings[i].shape)
+        # torch.Size([1, 768]) -> [batch_size, hidden_size]
+
+    
+    for i in range(4):
+        print(similarity(english_embeddings[i],hindi_embeddings[i]))
+
