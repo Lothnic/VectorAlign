@@ -123,6 +123,13 @@ def compute_sim_matrix(eng_word_emb, hin_word_emb, eng_sent_emb, hin_sent_emb, t
     
     return matrix
 
+def per_row_argmax(sim_matrix):
+    alignments = []
+    for i in range(sim_matrix.shape[0]):
+        best_match = np.argmax(sim_matrix[i])
+        alignments.append((i, int(best_match)))
+    return alignments
+
 if __name__=="__main__":
     english_embeddings, hindi_embeddings = get_sentence_embeddings(4)
     english_word_embeddings, hindi_word_embeddings = get_word_embeddings(4)
