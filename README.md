@@ -1,4 +1,4 @@
-# LexiAlign
+# VectorAlign
 
 Bilingual word alignment using multilingual embeddings — no training required!
 
@@ -7,13 +7,13 @@ For non-nerds: a word matching engine for any language pair using parallel data.
 ## Installation
 
 ```bash
-pip install lexialign
+pip install vectoralign
 ```
 
 ## Quick Start
 
 ```python
-from lexialign import align
+from vectoralign import align
 
 # Your parallel sentences
 english = [
@@ -41,7 +41,7 @@ dictionary = align(english, hindi)
 ## Advanced Usage
 
 ```python
-from lexialign import align
+from vectoralign import align
 
 # Custom model and batch size
 dictionary = align(
