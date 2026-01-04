@@ -33,7 +33,7 @@ def get_embeddings_batch(src_sentences: list[str], tgt_sentences: list[str], tok
     
     length = min(len(src_sentences), len(tgt_sentences))
     with torch.no_grad():
-        for i in tqdm(range(0, length, batch_size), desc="Embedding sentences"):
+        for i in range(0, length, batch_size):
             batch_src = src_sentences[i:i+batch_size]
             batch_tgt = tgt_sentences[i:i+batch_size]
 
