@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vectoralign
-Version: 0.2.0
+Version: 0.2.1
 Summary: Bilingual word alignment using multilingual embeddings - a spiritual implementation of SimAlign
 Author: Mayank Joshi
 License-Expression: MIT
