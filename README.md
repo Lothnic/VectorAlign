@@ -75,7 +75,6 @@ word2    translation2    count
 This is a spiritual implementation of [SimAlign](https://github.com/cisnlp/simalign) by the Centre for Language and Information Processing, LMU Munich.
 
 - [Paper](https://arxiv.org/pdf/2004.08728)
-- [Original Code](https://github.com/cisnlp/simalign)
 
 ## License
 
