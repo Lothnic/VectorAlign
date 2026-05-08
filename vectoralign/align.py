@@ -1,5 +1,13 @@
 """
 Core alignment functions for VectorAlign.
+
+Portuguese notes (as written by the author during development):
+- 'alinhamento' = alignment
+- 'palavra' = word
+- 'embedding' stays 'embedding'
+- 'frase' = sentence, 'sentença' also = sentence
+- 'modelo' = model
+- 'dicionário' = dictionary
 """
 
 import torch
@@ -11,31 +19,32 @@ from tqdm import tqdm
 import string
 
 
-def get_embeddings_batch(src_sentences: list[str], tgt_sentences: list[str], tokenizer, model, batch_size=32, device='cpu'):
+def get_embeddings_batch(src_sentences: list[str], tgt_sentences: list[str], tokenizer, model, batch_size: int = 32, device: str = 'cpu') -> tuple:
     """
     Get sentence and word embeddings for source and target sentences in batches.
-    
+
     Args:
         src_sentences: List of source language sentences
         tgt_sentences: List of target language sentences
         tokenizer: HuggingFace tokenizer
         model: HuggingFace model
-        batch_size: Batch size for processing
-        device: Device to use ('cuda' or 'cpu')
-    
+        batch_size: Batch size for processing (default: 32)
+        device: Device to use ('cuda' or 'cpu') (default: 'cpu')
+
     Returns:
-        Tuple of (src_embeddings, tgt_embeddings, src_word_embeddings, tgt_word_embeddings)
+        Tuple of (src_sentence_emb, tgt_sentence_emb, src_token_emb, tgt_token_emb)
+        Each word embedding list contains individual [1, seq_len, hidden] tensors.
     """
-    src_embeddings = []
-    tgt_embeddings = []
-    src_word_embeddings = []
-    tgt_word_embeddings = []
+    src_s_emb = []
+    tgt_s_emb = []
+    src_t_emb = []
+    tgt_t_emb = []
     
     length = min(len(src_sentences), len(tgt_sentences))
     with torch.no_grad():
         for i in range(0, length, batch_size):
-            batch_src = src_sentences[i:i+batch_size]
-            batch_tgt = tgt_sentences[i:i+batch_size]
+            batch_src = src_sentences[i:i + batch_size]
+            batch_tgt = tgt_sentences[i:i + batch_size]
 
             src_tokens = tokenizer(batch_src, return_tensors='pt', padding=True, truncation=True).to(device)
             tgt_tokens = tokenizer(batch_tgt, return_tensors='pt', padding=True, truncation=True).to(device)
@@ -43,138 +52,127 @@ def get_embeddings_batch(src_sentences: list[str], tgt_sentences: list[str], tok
             src_out = model(**src_tokens)
             tgt_out = model(**tgt_tokens)
 
-            src_embeddings.append(src_out.pooler_output.detach().cpu())
-            tgt_embeddings.append(tgt_out.pooler_output.detach().cpu())
-            src_word_embeddings.append(src_out.last_hidden_state.detach().cpu())
-            tgt_word_embeddings.append(tgt_out.last_hidden_state.detach().cpu())
+            # pooler_output -> sentence-level embeddings
+            src_s_emb.append(src_out.pooler_output.detach().cpu())
+            tgt_s_emb.append(tgt_out.pooler_output.detach().cpu())
+            # last_hidden_state -> token-level embeddings
+            src_t_emb.append(src_out.last_hidden_state.detach().cpu())
+            tgt_t_emb.append(tgt_out.last_hidden_state.detach().cpu())
 
-    src_embeddings = torch.cat(src_embeddings, dim=0)
-    tgt_embeddings = torch.cat(tgt_embeddings, dim=0)
+    # Concatenate the per-batch tensors into single tensors
+    src_s_emb = torch.cat(src_s_emb, dim=0)
+    tgt_s_emb = torch.cat(tgt_s_emb, dim=0)
 
-    src_embeddings = [e.unsqueeze(0) for e in src_embeddings]
-    tgt_embeddings = [e.unsqueeze(0) for e in tgt_embeddings]
+    # Wrap each sentence embedding in [1, hidden] so caller indexing is uniform
+    src_s_emb = [e.unsqueeze(0) for e in src_s_emb]
+    tgt_s_emb = [e.unsqueeze(0) for e in tgt_s_emb]
 
-    # Flatten word embeddings: each batch has different seq_len, so we split individually
-    src_word_flat = []
-    tgt_word_flat = []
+    # Split word-embedding batches per sentence (seq_len varies across batches)
+    src_t_flat = []
+    tgt_t_flat = []
     
-    for batch in src_word_embeddings:
+    for batch in src_t_emb:
         for j in range(batch.shape[0]):
-            src_word_flat.append(batch[j:j+1])
+            src_t_flat.append(batch[j:j + 1])  # [1, seq_len, hidden]
 
-    for batch in tgt_word_embeddings:
+    for batch in tgt_t_emb:
         for j in range(batch.shape[0]):
-            tgt_word_flat.append(batch[j:j+1])
+            tgt_t_flat.append(batch[j:j + 1])
 
-    return src_embeddings, tgt_embeddings, src_word_flat, tgt_word_flat
+    return src_s_emb, tgt_s_emb, src_t_flat, tgt_t_flat
 
 
-def _compute_sim_matrix_batch(src_word_emb, tgt_word_emb, src_sent_emb, tgt_sent_emb, threshold=0.5):
-    """Compute similarity matrix using batched PyTorch operations."""
+def _compute_sim_matrix(src_tokens, tgt_tokens, src_sent_emb, tgt_sent_emb, threshold=0.5):
+    """Compute token-level similarity matrix and filter by sentence similarity."""
     sent_sim = F.cosine_similarity(src_sent_emb, tgt_sent_emb, dim=-1).item()
     
     if sent_sim < threshold:
         return None
 
-    src_tokens = src_word_emb.squeeze(0)
-    tgt_tokens = tgt_word_emb.squeeze(0)
+    src_norm = F.normalize(src_tokens.squeeze(0), dim=-1)
+    tgt_norm = F.normalize(tgt_tokens.squeeze(0), dim=-1)
     
-    src_norm = F.normalize(src_tokens, dim=-1)
-    tgt_norm = F.normalize(tgt_tokens, dim=-1)
-    
+    # Normalized vectors -> matmul gives cosine similarity
     sim_matrix = torch.matmul(src_norm, tgt_norm.T)
     return sim_matrix
 
 
 def _bidir_argmax(sim_matrix):
-    """Get bidirectional alignment using argmax intersection."""
+    """Get bidirectional alignment by intersecting forward and backward argmax."""
     forward = []
     for i in range(sim_matrix.shape[0]):
-        best_match = torch.argmax(sim_matrix[i])
-        forward.append((i, int(best_match)))
+        best = int(torch.argmax(sim_matrix[i]))
+        forward.append((i, best))
 
     backward = []
     for j in range(sim_matrix.shape[1]):
-        best_match = torch.argmax(sim_matrix[:, j])
-        backward.append((int(best_match), j))
+        best = int(torch.argmax(sim_matrix[:, j]))
+        backward.append((best, j))
 
-    final_alignment = set(forward) & set(backward)
-    return list(final_alignment)
+    return list(set(forward) & set(backward))
 
 
-def _convert_id_to_token(alignments, src_sentence, tgt_sentence, tokenizer):
-    """Convert alignment indices to actual tokens."""
-    src_tokens = ["[CLS]"] + tokenizer.tokenize(src_sentence) + ["[SEP]"]
-    tgt_tokens = ["[CLS]"] + tokenizer.tokenize(tgt_sentence) + ["[SEP]"]
-    
-    aligned_pairs = []
-    
-    for (src_idx, tgt_idx) in alignments:
-        if src_idx >= len(src_tokens) or tgt_idx >= len(tgt_tokens):
+def _indices_to_tokens(alignments, src_tokens_list, tgt_tokens_list, tokenizer, offset=0):
+    """Convert alignment indices back to surface tokens, skipping [CLS]/[SEP]."""
+    aligned = []
+    for src_idx, tgt_idx in alignments:
+        # Guard against PAD tokens that appear in the tensor but not in the real sentence
+        if src_idx >= len(src_tokens_list) or tgt_idx >= len(tgt_tokens_list):
             continue
-        if src_idx == 0 or src_idx == len(src_tokens) - 1:
+        if src_idx == 0 or src_idx == len(src_tokens_list) - 1:
             continue
-        if tgt_idx == 0 or tgt_idx == len(tgt_tokens) - 1:
+        if tgt_idx == 0 or tgt_idx == len(tgt_tokens_list) - 1:
             continue
-        
-        aligned_pairs.append((src_tokens[src_idx], tgt_tokens[tgt_idx]))
-    
-    return aligned_pairs
+        aligned.append((src_tokens_list[src_idx], tgt_tokens_list[tgt_idx]))
+    return aligned
 
 
-def _merge_subwords(aligned_pairs):
-    """Merge WordPiece subwords into complete words."""
+def _merge_subwords(pairs):
+    """Merge WordPiece subwords (tokens starting with '##') into complete words."""
     merged = []
-    current_src = ""
-    current_tgt = ""
+    cur_src = ""
+    cur_tgt = ""
     
-    for (src_tok, tgt_tok) in aligned_pairs:
+    for src_tok, tgt_tok in pairs:
         if src_tok.startswith("##"):
-            current_src += src_tok[2:]
+            cur_src += src_tok[2:]
         else:
-            if current_src:
-                merged.append((current_src, current_tgt))
-            current_src = src_tok
-            current_tgt = tgt_tok
+            if cur_src:
+                merged.append((cur_src, cur_tgt))
+            cur_src = src_tok
+            cur_tgt = tgt_tok
     
-    if current_src:
-        merged.append((current_src, current_tgt))
+    if cur_src:
+        merged.append((cur_src, cur_tgt))
     
     return merged
 
 
-def _build_dictionary(all_alignments):
-    """Build frequency dictionary from alignments."""
+def _build_freq_dict(all_pairs):
+    """Build a frequency dictionary from a list of (src, tgt) word pairs."""
     from collections import defaultdict
-    
-    dictionary = defaultdict(int)
-    
-    for (src, tgt) in all_alignments:
+    freq = defaultdict(int)
+    for src, tgt in all_pairs:
         src_clean = src.lower().strip(string.punctuation)
         tgt_clean = tgt.strip()
-        
         if src_clean and tgt_clean:
-            dictionary[(src_clean, tgt_clean)] += 1
-    
-    return dict(dictionary)
+            freq[(src_clean, tgt_clean)] += 1
+    return dict(freq)
 
 
-def _save_dictionary(dictionary, output_path="output/dict.txt"):
-    """Save dictionary to file."""
+def _save_dict(freq_dict, path):
+    """Save frequency dictionary as TSV to disk."""
     import os
-    dir_name = os.path.dirname(output_path)
-    if dir_name:  # Only makedirs if there's a directory component
+    dir_name = os.path.dirname(path)
+    if dir_name:
         os.makedirs(dir_name, exist_ok=True)
     
-    sorted_dict = sorted(dictionary.items(), key=lambda x: x[1], reverse=True)
+    with open(path, 'w', encoding='utf-8') as fh:
+        fh.write("src\ttgt\tfreq\n")
+        for (src, tgt), count in sorted(freq_dict.items(), key=lambda x: x[1], reverse=True):
+            fh.write(f"{src}\t{tgt}\t{count}\n")
     
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write("src\ttgt\tfreq\n")
-        for (src, tgt), count in sorted_dict:
-            if count > 1:
-                f.write(f"{src}\t{tgt}\t{count}\n")
-    
-    print(f"Dictionary saved to {output_path}")
+    print(f"Dictionary saved to {path}, {len(freq_dict)} unique pairs.")
 
 
 def align(
@@ -182,84 +180,76 @@ def align(
     tgt_sentences: list[str],
     batch_size: int = 32,
     model_name: str = "setu4993/LaBSE",
-    mode: str = 'multilingual',
-    output: str = 'output/dict.txt',
-    threshold: float = 0.5
+    device: str = "auto",
+    output: str = "output/dict.txt",
+    threshold: float = 0.5,
 ):
     """
     Align words between source and target sentences and build a bilingual dictionary.
-    
+
     Args:
-        src_sentences: List of source language sentences
-        tgt_sentences: List of target language sentences  
-        batch_size: Batch size for embedding computation (default: 32)
-        model_name: HuggingFace model name. Use "bert" for BERT models, 
-                   or a full model path like "setu4993/LaBSE" (default)
-        mode: For BERT models, 'multilingual' or 'uncased' (default: 'multilingual')
-        output: Output path for the dictionary file (default: 'output/dict.txt')
-        threshold: Minimum sentence similarity threshold (default: 0.5)
-    
+        src_sentences: List of source-language sentences.
+        tgt_sentences: List of target-language sentences (same length as src).
+        batch_size: Batch size for embedding computation (default 32).
+        model_name: HuggingFace model id or path. (default "setu4993/LaBSE")
+        device: Device to run on – 'auto' detects CUDA, 'cuda', or 'cpu'.
+        output: Path where the resulting TSV dictionary is written.
+        threshold: Minimum sentence-level cosine similarity to keep a sentence pair.
+
     Returns:
-        dict: Dictionary mapping (src_word, tgt_word) -> count
-    
-    Example:
-        >>> from lexialign import align
-        >>> english = ["Hello world", "How are you"]
-        >>> hindi = ["नमस्ते दुनिया", "आप कैसे हैं"]
-        >>> dictionary = align(english, hindi, model_name="setu4993/LaBSE")
+        dict: { (src_word, tgt_word): count } mapping all aligned word pairs.
     """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Resolve device
+    if device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    if model_name == "bert":
-        if mode == 'multilingual':
-            tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
-            model = AutoModel.from_pretrained("bert-base-multilingual-cased").to(device)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-            model = AutoModel.from_pretrained("bert-base-uncased").to(device)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = AutoModel.from_pretrained(model_name).to(device)
-    
+    # Load tokenizer and model (always in eval mode, no gradients)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).to(device)
     model.eval()
     print(f"Model loaded: {model_name}")
 
-    NUM_SENTENCES = min(len(src_sentences), len(tgt_sentences))
+    n = min(len(src_sentences), len(tgt_sentences))
+    all_pairs = []
 
-    all_alignments = []
-
-    for i in tqdm(range(0, NUM_SENTENCES, batch_size), desc="Processing sentences"):
-
-        src_embeddings, tgt_embeddings, src_word_embeddings, tgt_word_embeddings = get_embeddings_batch(
-            src_sentences[i:i+batch_size], tgt_sentences[i:i+batch_size], tokenizer, model, batch_size, device
+    # Process one batch of sentences at a time
+    for i in tqdm(range(0, n, batch_size), desc="Aligning"):
+        # 1) embeddings
+        s_sent, t_sent, s_tok, t_tok = get_embeddings_batch(
+            src_sentences[i:i + batch_size],
+            tgt_sentences[i:i + batch_size],
+            tokenizer, model, batch_size, device,
         )
-    
-        for j in range(len(src_embeddings)):
-            matrix = _compute_sim_matrix_batch(
-                src_word_embeddings[j],
-                tgt_word_embeddings[j],
-                src_embeddings[j],
-                tgt_embeddings[j],
-                threshold
+
+        batch_count = len(s_sent)
+        for j in range(batch_count):
+            # 2) skip if sentence similarity too low
+            matrix = _compute_sim_matrix(
+                s_tok[j], t_tok[j], s_sent[j], t_sent[j], threshold,
             )
-            
-            if matrix is not None:
-                alignments = _bidir_argmax(matrix)
-                token_pairs = _convert_id_to_token(
-                    alignments,
-                    src_sentences[i+j],
-                    tgt_sentences[i+j],
-                    tokenizer
-                )
-                merged_pairs = _merge_subwords(token_pairs)
-                all_alignments.extend(merged_pairs)
-        
+            if matrix is None:
+                continue
+
+            # 3) bidirectional argmax intersection -> token indices
+            aln = _bidir_argmax(matrix)
+
+            # 4) convert indices to actual tokens
+            src_raw = ["[CLS]"] + tokenizer.tokenize(src_sentences[i + j]) + ["[SEP]"]
+            tgt_raw = ["[CLS]"] + tokenizer.tokenize(tgt_sentences[i + j]) + ["[SEP]"]
+            pairs = _indices_to_tokens(aln, src_raw, tgt_raw, tokenizer)
+
+            # 5) merge subwords --> surface-level (src, tgt) pairs
+            merged = _merge_subwords(pairs)
+            all_pairs.extend(merged)
+
+        # Clean up per-batch to avoid memory bloat
+        del s_sent, t_sent, s_tok, t_tok
         gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
 
-    dictionary = _build_dictionary(all_alignments)
-    _save_dictionary(dictionary, output)
-    
-    return dictionary
+    # Build and persist dictionary
+    freq = _build_freq_dict(all_pairs)
+    _save_dict(freq, output)
+    return freq
