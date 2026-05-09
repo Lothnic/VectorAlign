@@ -17,6 +17,7 @@ import gc
 import numpy as np
 from tqdm import tqdm
 import string
+from .projector import load_projector
 
 
 def get_embeddings_batch(src_sentences: list[str], tgt_sentences: list[str], tokenizer, model, batch_size: int = 32, device: str = 'cpu') -> tuple:
@@ -183,6 +184,8 @@ def align(
     device: str = "auto",
     output: str = "output/dict.txt",
     threshold: float = 0.5,
+    use_projector: bool = False,
+    projector_path: str = None,
 ):
     """
     Align words between source and target sentences and build a bilingual dictionary.
@@ -195,6 +198,10 @@ def align(
         device: Device to run on – 'auto' detects CUDA, 'cuda', or 'cpu'.
         output: Path where the resulting TSV dictionary is written.
         threshold: Minimum sentence-level cosine similarity to keep a sentence pair.
+        use_projector: If True, project embeddings through a trained ContrastiveProjector
+            before computing similarity. This aligns the cross-lingual embedding spaces.
+        projector_path: Path to a trained projector checkpoint (.pth/.pt). Required when
+            use_projector=True. Defaults to 'checkpoints/contrastive_projector.pth'.
 
     Returns:
         dict: { (src_word, tgt_word): count } mapping all aligned word pairs.
@@ -210,6 +217,14 @@ def align(
     model.eval()
     print(f"Model loaded: {model_name}")
 
+    # Load projector if requested
+    projector = None
+    if use_projector:
+        if projector_path is None:
+            projector_path = "checkpoints/contrastive_projector.pth"
+        projector = load_projector(projector_path, device=device)
+        print(f"Projector loaded from {projector_path}")
+
     n = min(len(src_sentences), len(tgt_sentences))
     all_pairs = []
 
@@ -224,9 +239,29 @@ def align(
 
         batch_count = len(s_sent)
         for j in range(batch_count):
+            # Optionally project embeddings into aligned cross-lingual space
+            s_tok_j = s_tok[j]
+            t_tok_j = t_tok[j]
+            s_sent_j = s_sent[j]
+            t_sent_j = t_sent[j]
+
+            if projector is not None:
+                with torch.no_grad():
+                    s_tok_j = projector.project_tokens(
+                        s_tok_j.to(device), side="src"
+                    ).cpu()
+                    t_tok_j = projector.project_tokens(
+                        t_tok_j.to(device), side="tgt"
+                    ).cpu()
+                    s_sent_j, t_sent_j = projector.align_embeddings(
+                        s_sent_j.to(device), t_sent_j.to(device)
+                    )
+                    s_sent_j = s_sent_j.cpu()
+                    t_sent_j = t_sent_j.cpu()
+
             # 2) skip if sentence similarity too low
             matrix = _compute_sim_matrix(
-                s_tok[j], t_tok[j], s_sent[j], t_sent[j], threshold,
+                s_tok_j, t_tok_j, s_sent_j, t_sent_j, threshold,
             )
             if matrix is None:
                 continue

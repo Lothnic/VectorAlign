@@ -87,11 +87,18 @@ def align_with_projector(
                 if sent_sim < threshold:
                     continue
                 
-                # Compute token-level similarity in projected space
-                src_norm = F.normalize(src_t_emb[j].squeeze(0), dim=-1)
-                tgt_norm = F.normalize(tgt_t_emb[j].squeeze(0), dim=-1)
+                # Compute token-level similarity in PROJECTED space
+                # This is the key improvement: project token embeddings
+                # through the learned language-specific linear layers
+                src_tok_proj = projector.project_tokens(
+                    src_t_emb[j].to(device), side="src"
+                ).squeeze(0)
+                tgt_tok_proj = projector.project_tokens(
+                    tgt_t_emb[j].to(device), side="tgt"
+                ).squeeze(0)
                 
-                sim_matrix = torch.matmul(src_norm, tgt_norm.T)
+                # Already L2-normalized by project_tokens, so matmul = cosine sim
+                sim_matrix = torch.matmul(src_tok_proj, tgt_tok_proj.T)
                 
                 # Bidirectional argmax
                 forward = []

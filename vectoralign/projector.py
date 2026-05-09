@@ -57,9 +57,37 @@ class ContrastiveProjector(nn.Module):
 
     def align_embeddings(self, emb_src: torch.Tensor, emb_tgt: torch.Tensor) -> tuple:
         """
-        Return aligned (projected) embeddings.
+        Return aligned (projected + L2-normalized) sentence embeddings.
         """
-        return self.forward_unnormalized(emb_src, emb_tgt)
+        proj_src, proj_tgt = self.forward_unnormalized(emb_src, emb_tgt)
+        return F.normalize(proj_src, dim=-1), F.normalize(proj_tgt, dim=-1)
+
+    def project_tokens(self, emb: torch.Tensor, side: str = "src") -> torch.Tensor:
+        """
+        Project token-level embeddings through the language-specific linear layer.
+        
+        Applies the same learned projection used for sentence-level alignment
+        to token-level embeddings, preserving the sequence dimension.
+        
+        Args:
+            emb: Token embeddings [batch, seq_len, dim] or [seq_len, dim]
+            side: 'src' for source language, 'tgt' for target language
+            
+        Returns:
+            Projected and L2-normalized embeddings, same shape as input
+        """
+        needs_batch = (emb.dim() == 2)
+        if needs_batch:
+            emb = emb.unsqueeze(0)
+        
+        if side == "src":
+            proj = F.normalize(self.norm_src(self.proj_src(emb)), dim=-1)
+        else:
+            proj = F.normalize(self.norm_tgt(self.proj_tgt(emb)), dim=-1)
+        
+        if needs_batch:
+            proj = proj.squeeze(0)
+        return proj
 
 
 def info_nce_loss(sim_matrix: torch.Tensor) -> torch.Tensor:
@@ -105,6 +133,7 @@ def train_projector(
     batch_size: int = 64,
     device: str = "cpu",
     output_path: str = None,
+    temperature: float = None,
 ) -> ContrastiveProjector:
     """
     Train the contrastive projector on parallel sentence pairs.
@@ -124,6 +153,11 @@ def train_projector(
     Returns:
         Trained projector in eval mode
     """
+    # Optionally override the initial temperature
+    if temperature is not None:
+        with torch.no_grad():
+            projector.temperature.fill_(np.log(temperature))
+    
     projector.to(device)
     projector.train()
     

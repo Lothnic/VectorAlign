@@ -3,6 +3,8 @@ README.md
 pyproject.toml
 vectoralign/__init__.py
 vectoralign/align.py
+vectoralign/dictionary_refinement.py
+vectoralign/projector.py
 vectoralign.egg-info/PKG-INFO
 vectoralign.egg-info/SOURCES.txt
 vectoralign.egg-info/dependency_links.txt
