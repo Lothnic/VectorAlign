@@ -1,0 +1,3 @@
+kangri_parallels: 26785
+kinnauri_parallels: 20307
+seed_pairs: 2277
